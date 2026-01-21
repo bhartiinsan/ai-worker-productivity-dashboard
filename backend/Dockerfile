@@ -31,4 +31,13 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+# Start script to initialize database and seed data
+RUN echo '#!/bin/bash\n\
+    set -e\n\
+    echo "Initializing database..."\n\
+    python -c "from app.database import engine, Base; from app import models; Base.metadata.create_all(bind=engine)"\n\
+    echo "Starting server..."\n\
+    exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers\n\
+    ' > /app/start.sh && chmod +x /app/start.sh
+
+CMD ["/app/start.sh"]

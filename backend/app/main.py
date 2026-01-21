@@ -54,6 +54,26 @@ app = FastAPI(
     redoc_url="/redoc" if settings.environment == "development" else None
 )
 
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database with seed data on startup if empty."""
+    from .database import SessionLocal
+    db = SessionLocal()
+    try:
+        # Check if database is empty
+        worker_count = db.query(models.Worker).count()
+        if worker_count == 0:
+            logger.info("Database is empty. Seeding with initial data...")
+            result = seed_database(db, clear_existing=False, hours_back=24)
+            logger.info(f"Seed complete: {result['workers_created']} workers, {result['workstations_created']} workstations, {result['events_created']} events")
+        else:
+            logger.info(f"Database already has {worker_count} workers. Skipping seed.")
+    except Exception as e:
+        logger.error(f"Startup seeding failed: {e}")
+    finally:
+        db.close()
+
 # Rate limiting
 app.state.limiter = limiter
 
