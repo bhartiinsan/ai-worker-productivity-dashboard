@@ -342,6 +342,7 @@ The seeding function includes:
 |----------|---------|----------|
 | [README.md](README.md) | Quick start & overview | Everyone |
 | [EVALUATOR-GUIDE.md](EVALUATOR-GUIDE.md) | 10-minute assessment guide | Technical reviewers |
+| [docs/CLI-REFERENCE.md](docs/CLI-REFERENCE.md) | Workflow manager commands | Developers |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System design deep dive | Engineers |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Environment setup | DevOps |
 | [docs/METRICS.md](docs/METRICS.md) | Metric formulas & ranges | Data analysts |
