@@ -14,7 +14,45 @@ from .. import crud, models, schemas
 
 
 def _compute_durations(events: List[models.AIEvent], window_start: Optional[datetime], window_end: Optional[datetime]):
-    """Accumulate hours spent per state between window_start and window_end."""
+    """
+    Compute time spent in each state (working, idle, absent) for a worker within a time window.
+    
+    **Algorithm**: State Machine with Chronological Ordering
+    
+    **Key Innovation**: Handles out-of-order event arrivals by sorting by event.timestamp
+    before calculating state transitions. This ensures deterministic results even if
+    events arrive late due to network delays.
+    
+    **Mathematical Formula**:
+    For each state S and time window [start, end]:
+      hours[S] = Σ(transition_i+1.time - transition_i.time) where state[i] = S
+    
+    **Example**:
+    Events (unsorted arrival):
+      Event 1: 14:30:00 working   (arrived at 14:30:05)
+      Event 2: 14:20:00 idle      (arrived at 14:35:00, out-of-order!)
+      Event 3: 14:40:00 working   (arrived at 14:40:10)
+    
+    After sorting by timestamp:
+      Event 2: 14:20:00 idle      → idle duration = (14:30:00 - 14:20:00) = 10 min
+      Event 1: 14:30:00 working   → working duration = (14:40:00 - 14:30:00) = 10 min
+      Event 3: 14:40:00 working   → working duration from 14:40:00 → now
+    
+    **Design Rationale**:
+    - Sorting is O(n log n), but ensures correct accounting even with network jitter
+    - Tail state (last event to window_end) assumes worker remains in that state
+    - Edges: if window_start > oldest_event, only count time after window_start
+    
+    **Parameters**:
+    - events: List of AIEvent objects for one worker
+    - window_start: Metric calculation start time (None = use earliest event)
+    - window_end: Metric calculation end time (None = now)
+    
+    **Returns**:
+    - (durations_dict, actual_start, actual_end)
+      - durations_dict: {"working": 7.2, "idle": 0.5, "absent": 0.0, "product_count": 0}
+      - actual_start, actual_end: Normalized window after applying events
+    """
     if not events:
         return {"working": 0.0, "idle": 0.0, "absent": 0.0, "product_count": 0.0}, window_start, window_end
 
@@ -48,6 +86,68 @@ def worker_metrics(
     start_time: Optional[datetime] = None,
     end_time: Optional[datetime] = None,
 ) -> List[schemas.WorkerMetrics]:
+    """
+    Compute per-worker productivity metrics: utilization, throughput, and availability.
+    
+    **Metrics Definitions**:
+    
+    1. **Utilization Percentage**
+       Formula: (working_hours / elapsed_hours) × 100
+       Range: [0%, 100%]
+       Interpretation: 
+         - 95% = worker spent 95% of shift actively working
+         - 40% = worker idle/absent 60% of shift (investigate)
+       
+    2. **Units Per Hour** (Throughput)
+       Formula: total_units_produced / working_hours
+       Range: [0, ∞)
+       Interpretation:
+         - 5.2 units/hr = expected production rate
+         - > 7.0 units/hr = outlier (possibly equipment-assisted or data error)
+         - < 2.0 units/hr = low performer (provide coaching)
+       Note: Only counts during "working" state; idle/absent periods excluded
+       
+    3. **Total Active Time Hours**
+       Sum of all 'working' state durations within [start_time, end_time]
+       Used for: Shift planning, payroll validation, fatigue analysis
+       
+    4. **Total Idle Time Hours**
+       Sum of all 'idle' state durations
+       Interpretation: Maintenance, tool changes, break time (legitimate)
+       vs. unscheduled downtime (investigate if > 2 hours)
+    
+    **Sorting & Deduplication**:
+    - Events are sorted by timestamp to handle late arrivals from buffering/network delays
+    - Deduplication already applied at ingestion layer, but double-check in metrics
+    
+    **Edge Cases**:
+    - No events for worker → utilization = 0%, units/hour = 0
+    - Only idle/absent events → utilization = 0%, units/hour = undefined (set to 0)
+    - elapsed_time < 1 second → avoid division by zero, cap at 0
+    
+    **Parameters**:
+    - db: Database session
+    - worker_id: Specific worker or None for all workers
+    - start_time: Metric window start (ISO 8601 or None for earliest event)
+    - end_time: Metric window end (ISO 8601 or None for now)
+    
+    **Returns**:
+    - List[WorkerMetrics]: One object per worker with all computed KPIs
+    
+    **Example Response**:
+    [
+      {
+        "worker_id": "W1",
+        "worker_name": "John Smith",
+        "total_active_time_hours": 7.75,
+        "total_idle_time_hours": 0.25,
+        "utilization_percentage": 96.87,
+        "total_units_produced": 45,
+        "units_per_hour": 5.81,
+        "last_seen": "2026-01-21T16:00:00Z"
+      }
+    ]
+    """
     workers = [crud.get_worker(db, worker_id)] if worker_id else crud.get_workers(db)
     results: List[schemas.WorkerMetrics] = []
 
