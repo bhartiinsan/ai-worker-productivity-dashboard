@@ -9,16 +9,88 @@ function Show-Banner {
 }
 function Show-Help {
     Show-Banner
+    Write-Host "USAGE:" -ForegroundColor Green
+    Write-Host "  .\manage.ps1 <Command>" -ForegroundColor White
+    Write-Host ""
     Write-Host "COMMANDS:" -ForegroundColor Green
-    Write-Host "  Setup       - Initialize environment" -ForegroundColor White
-    Write-Host "  Start       - Launch backend and frontend" -ForegroundColor White
-    Write-Host "  StartDocker - Launch using Docker" -ForegroundColor White
-    Write-Host "  Stop        - Stop local services" -ForegroundColor White
-    Write-Host "  StopAll     - Stop all services" -ForegroundColor White
-    Write-Host "  Test        - Run tests" -ForegroundColor White
-    Write-Host "  Status      - Show status" -ForegroundColor White
-    Write-Host "  Clean       - Clean artifacts" -ForegroundColor White
-    Write-Host "  Help        - Show help" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  Setup" -ForegroundColor Cyan
+    Write-Host "    Initialize development environment" -ForegroundColor Gray
+    Write-Host "    - Creates Python virtual environment" -ForegroundColor DarkGray
+    Write-Host "    - Installs backend dependencies (FastAPI, SQLAlchemy, etc.)" -ForegroundColor DarkGray
+    Write-Host "    - Installs frontend dependencies (React, TypeScript, etc.)" -ForegroundColor DarkGray
+    Write-Host "    Usage: .\manage.ps1 Setup" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Start" -ForegroundColor Cyan
+    Write-Host "    Launch backend (port 8000) and frontend (port 3000) locally" -ForegroundColor Gray
+    Write-Host "    - Opens two PowerShell windows (backend + frontend)" -ForegroundColor DarkGray
+    Write-Host "    - Auto-opens browser to http://localhost:3000" -ForegroundColor DarkGray
+    Write-Host "    - Backend API docs: http://localhost:8000/docs" -ForegroundColor DarkGray
+    Write-Host "    Usage: .\manage.ps1 Start" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  StartDocker" -ForegroundColor Cyan
+    Write-Host "    Launch services using Docker Compose" -ForegroundColor Gray
+    Write-Host "    - Requires Docker Desktop installed and running" -ForegroundColor DarkGray
+    Write-Host "    - Builds images and starts containers in detached mode" -ForegroundColor DarkGray
+    Write-Host "    - View logs: docker-compose logs -f" -ForegroundColor DarkGray
+    Write-Host "    Usage: .\manage.ps1 StartDocker" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Stop" -ForegroundColor Cyan
+    Write-Host "    Stop local Python and Node.js processes" -ForegroundColor Gray
+    Write-Host "    - Kills all running python.exe and node.exe processes" -ForegroundColor DarkGray
+    Write-Host "    - Does NOT stop Docker containers (use StopAll)" -ForegroundColor DarkGray
+    Write-Host "    Usage: .\manage.ps1 Stop" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  StopAll" -ForegroundColor Cyan
+    Write-Host "    Stop all services (local + Docker)" -ForegroundColor Gray
+    Write-Host "    - Runs docker-compose down" -ForegroundColor DarkGray
+    Write-Host "    - Stops local Python and Node.js processes" -ForegroundColor DarkGray
+    Write-Host "    Usage: .\manage.ps1 StopAll" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Status" -ForegroundColor Cyan
+    Write-Host "    Show which services are running" -ForegroundColor Gray
+    Write-Host "    - Checks port 8000 (backend)" -ForegroundColor DarkGray
+    Write-Host "    - Checks port 3000 (frontend)" -ForegroundColor DarkGray
+    Write-Host "    Usage: .\manage.ps1 Status" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Test" -ForegroundColor Cyan
+    Write-Host "    Verify project file structure" -ForegroundColor Gray
+    Write-Host "    - Checks for required files (main.py, package.json, etc.)" -ForegroundColor DarkGray
+    Write-Host "    Usage: .\manage.ps1 Test" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Clean" -ForegroundColor Cyan
+    Write-Host "    Remove build artifacts and caches" -ForegroundColor Gray
+    Write-Host "    - Deletes __pycache__ directories" -ForegroundColor DarkGray
+    Write-Host "    - Removes frontend/build folder" -ForegroundColor DarkGray
+    Write-Host "    - Deletes *.log files" -ForegroundColor DarkGray
+    Write-Host "    Usage: .\manage.ps1 Clean" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Help" -ForegroundColor Cyan
+    Write-Host "    Display this help message" -ForegroundColor Gray
+    Write-Host "    Usage: .\manage.ps1 Help" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "EXAMPLES:" -ForegroundColor Green
+    Write-Host "  # First-time setup" -ForegroundColor Gray
+    Write-Host "  .\manage.ps1 Setup" -ForegroundColor Yellow
+    Write-Host "  .\manage.ps1 Start" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  # Check if services are running" -ForegroundColor Gray
+    Write-Host "  .\manage.ps1 Status" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  # Restart services" -ForegroundColor Gray
+    Write-Host "  .\manage.ps1 Stop" -ForegroundColor Yellow
+    Write-Host "  .\manage.ps1 Start" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  # Docker deployment" -ForegroundColor Gray
+    Write-Host "  .\manage.ps1 StartDocker" -ForegroundColor Yellow
+    Write-Host "  docker-compose logs -f      # View logs" -ForegroundColor Yellow
+    Write-Host "  .\manage.ps1 StopAll        # Stop containers" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "URLS:" -ForegroundColor Green
+    Write-Host "  Frontend:    http://localhost:3000" -ForegroundColor Cyan
+    Write-Host "  Backend:     http://localhost:8000" -ForegroundColor Cyan
+    Write-Host "  API Docs:    http://localhost:8000/docs" -ForegroundColor Cyan
+    Write-Host "  Redoc:       http://localhost:8000/redoc" -ForegroundColor Cyan
     Write-Host ""
 }
 function Initialize-Environment {
