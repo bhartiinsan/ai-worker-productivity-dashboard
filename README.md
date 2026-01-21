@@ -293,6 +293,145 @@ ai-worker-productivity-dashboard/
 
 ---
 
+## 📊 Metric Definitions & Formulas
+
+### Worker Metrics
+
+**Utilization Percentage**
+```
+Utilization % = (Total Working Time / Total Observed Time) × 100
+
+Where:
+  Total Working Time = Σ duration(event_type = "working")
+  Total Observed Time = (last_event_timestamp - first_event_timestamp)
+  Range: 0-100%
+```
+
+**Production Rate (Throughput)**
+```
+Units per Hour = Total Units Produced / Total Working Time (hours)
+
+Where:
+  Total Units = Σ count(event_type = "product_count")
+  Range: 0-∞ (typical: 2-8 units/hr)
+```
+
+**Availability**
+```
+Availability % = (1 - Absent Time / Total Time) × 100
+
+Where:
+  Absent Time = Σ duration(event_type = "absent")
+```
+
+### Factory Metrics
+
+**Average Utilization**
+```
+Factory Utilization = Σ(Worker Utilization × Worker Active Hours) / Σ(Total Active Hours)
+
+Weighted by worker activity to avoid bias from idle workers
+```
+
+**Production Rate**
+```
+Factory Production Rate = Total Units / Total Working Hours (all workers)
+```
+
+### Workstation Metrics
+
+**Occupancy**
+```
+Occupancy % = (Time with Active Worker / Total Time) × 100
+```
+
+**Efficiency**
+```
+Efficiency = Units Produced at Station / Occupancy Time
+```
+
+---
+
+## 🛡️ Edge Case Handling
+
+### 1. Duplicate Events
+**Problem**: Network retries may send the same event multiple times
+
+**Solution**:
+- Database-level UNIQUE constraint on `(timestamp, worker_id, event_type)`
+- Duplicate events are rejected at INSERT time (IGNORE ON CONFLICT)
+- API returns `{"status": "duplicate"}` instead of error
+- Idempotent design ensures calling endpoint twice = same database state
+
+**Code Location**: `backend/app/models.py` line 45-50
+
+---
+
+### 2. Out-of-Order Events
+**Problem**: Event with timestamp 10:05 arrives after event with timestamp 10:10
+
+**Solution**:
+- All metric calculations sort events by `timestamp` (not `created_at`)
+- Chronological ordering enforced before duration computation
+- State machine processes events in timestamp order
+- Late-arriving events correctly update metrics on recalculation
+
+**Code Location**: `backend/app/services/metrics_service.py` - `_compute_durations()`
+
+**Example**:
+```python
+# Events arrive: [10:10 working], [10:05 working], [10:15 idle]
+# Sorted to: [10:05 working], [10:10 working], [10:15 idle]
+# Correctly computes: 10 minutes working, then transition to idle
+```
+
+---
+
+### 3. Intermittent Connectivity
+**Problem**: Camera loses WiFi for 15 minutes, events buffered locally
+
+**Solution**:
+- **Edge buffering**: Local SQLite queue stores up to 10,000 events
+- **Exponential backoff**: Retry at 1s, 2s, 4s, 8s... up to 5min intervals
+- **Batch upload**: On reconnect, uploads 100 events/batch via `/api/events/batch`
+- **Bitemporal tracking**: `event_time` preserves actual occurrence, `created_at` shows delay
+- **Health monitoring**: Edge pings `/health` every 30s to detect connectivity
+
+**Production Example**:
+```
+10:00 AM - WiFi drops
+10:00-10:15 AM - 150 events buffered locally
+10:15 AM - Connection restored
+10:15:05 - Batch 1 uploaded (events 1-100)
+10:15:12 - Batch 2 uploaded (events 101-150)
+Result: All events preserved with accurate timestamps
+```
+
+---
+
+### 4. Missing or Incomplete Data
+**Problem**: Worker has no events for a time period
+
+**Solution**:
+- Metrics return `0%` utilization rather than error
+- Division by zero checks: `if total_time == 0: return 0`
+- Missing workers excluded from factory averages (don't bias downward)
+- Frontend displays "No data" badge instead of breaking
+
+---
+
+### 5. Confidence Score Filtering
+**Problem**: AI model has low confidence on some detections
+
+**Solution**:
+- API rejects events with `confidence < 0.7` (configurable threshold)
+- Frontend allows filtering events by confidence score
+- Model health monitoring alerts if avg confidence drops below 0.75
+
+**Code Location**: `backend/app/main.py` - validation middleware
+
+---
+
 ## 🧪 Data Integrity
 
 ### Deduplication Strategy
