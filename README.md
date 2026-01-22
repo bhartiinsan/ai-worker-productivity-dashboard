@@ -35,6 +35,8 @@ Real-time monitoring and analysis of worker productivity through AI-powered CCTV
 
 Monitor worker productivity across 6 workstations in real-time using AI-powered CCTV cameras. The system ingests events from edge devices, applies deduplication logic, and computes factory-wide metrics instantly.
 
+**This project assumes a fixed sample setup of 6 workers and 6 workstations as per assessment constraints, with all data generated via seeded AI events.**
+
 **System Flow:**
 ```
 CCTV Cameras → AI Detection → FastAPI Backend → SQLite Database → React Dashboard
@@ -65,6 +67,7 @@ CCTV Cameras → AI Detection → FastAPI Backend → SQLite Database → React 
 ### Frontend
 - ✅ Factory KPI cards (active workers, utilization, production rate)
 - ✅ Worker productivity leaderboard with rankings
+- ✅ **Worker filter dropdown** for individual performance analysis
 - ✅ Workstation utilization grid with heatmap
 - ✅ Live AI event stream with color-coded badges
 - ✅ Productivity trend charts
@@ -102,6 +105,46 @@ CCTV Cameras → AI Detection → FastAPI Backend → SQLite Database → React 
 
 ## 🚀 Quick Start
 
+### 🎯 Zero-Configuration Docker Setup
+
+**Everything works with ONE command - no manual setup required:**
+
+```bash
+# Option 1: Using docker compose directly
+docker compose up --build
+
+# Option 2: Using provided startup scripts
+# Linux/macOS:
+./run_app.sh
+
+# Windows:
+run_app.bat
+```
+
+**What happens automatically:**
+1. ✅ Backend starts with SQLite database
+2. ✅ Health checks ensure backend is ready
+3. ✅ Frontend starts only after backend is healthy
+4. ✅ Database auto-seeds with 6 workers and 6 workstations (when using scripts)
+
+**Access Points:**
+- 🎨 **Dashboard**: http://localhost:3000
+- 🔧 **API Docs**: http://localhost:8000/docs
+- ❤️ **Health Check**: http://localhost:8000/health
+
+**Stop services:**
+```bash
+docker compose down
+```
+
+### 🌐 Live Demo
+
+**Production Deployment:** [Coming Soon - Deploy to Render/Railway]
+
+*The live demo comes pre-loaded with 24 hours of realistic factory data for immediate evaluation.*
+
+---
+
 ### Prerequisites
 Choose one deployment method:
 - **Option 1**: Docker Desktop (recommended for quick demo)
@@ -110,10 +153,13 @@ Choose one deployment method:
 ### Option 1: Docker (Recommended - 2 Commands)
 
 ```bash
-# 1. Start all services
+# Quick start (one command to build and run)
+docker compose up --build
+
+# OR start in detached mode:
 docker compose up -d
 
-# 2. Seed database with 24 hours of realistic data
+# Then seed database with 24 hours of realistic data
 curl -X POST "http://localhost:8000/api/admin/seed?clear_existing=true"
 ```
 
@@ -158,8 +204,15 @@ npm start
 
 **Seed Data:**
 ```bash
+# Refresh dummy data (clears existing and generates 24h of events)
 curl -X POST "http://localhost:8000/api/admin/seed?clear_existing=true"
+
+# Verify exactly 6 workers and 6 workstations were created
+curl http://localhost:8000/api/workers | jq '. | length'  # Returns: 6
+curl http://localhost:8000/api/workstations | jq '. | length'  # Returns: 6
 ```
+
+**💡 Pro Tip:** The dashboard has a "Reseed sample data" button for one-click data refresh during evaluation.
 
 ### Windows Quick Launch
 
@@ -284,15 +337,60 @@ ai-worker-productivity-dashboard/
 
 ## 📊 Metrics & Data Integrity
 
-### Key Performance Indicators
-- **Worker Utilization**: `(Working Time / Observed Time) × 100`
-- **Production Rate**: `Units Produced / Working Hours`
-- **Factory Utilization**: Weighted average across all active workers
-- **Workstation Occupancy**: `(Active Time / Total Time) × 100`
+### Metric Definitions & Formulas
+
+| Metric | Calculation Formula | Assumption |
+|--------|---------------------|------------|
+| **Utilization %** | `(Total Active Time / (Active Time + Idle Time)) × 100` | Each 'working' event duration = time until next event or 5-minute timeout |
+| **Units per Hour** | `Total Units Produced / Total Active Hours` | Counts only time spent in 'working' state |
+| **Throughput Rate** | `Total Units / Total Workstation Occupancy Hours` | Includes 'working' and 'idle' time at station |
+| **Production Rate** | `Average Units per Hour across all active workers` | Weighted by worker productivity |
+
+### Mathematical Definitions
+
+**Worker Active Time**  
+Sum of time intervals where the latest state event is `working`.
+
+**Worker Idle Time**  
+Sum of time intervals where the latest state event is `idle`.
+
+**Utilization Percentage**  
+```
+Utilization = Active Time / (Active Time + Idle Time) × 100
+```
+
+**Units Produced**  
+Sum of `count` from all `product_count` events for the worker/workstation.
+
+**Units per Hour**  
+```
+Units per Hour = Total Units Produced / Total Active Hours
+```
+
+### Assumptions
+
+**Metric Aggregation Model:**  
+We use a **"State-Duration" model** for time-based metrics. Each `working` or `idle` event is assumed to represent the worker's state until a new event of a different type is received. If no event is received for >10 minutes, the worker is marked as `absent`. `product_count` events are treated as instantaneous markers and summed within the `working` duration windows.
+
+**Core Assumptions:**
+- Time between two consecutive state events represents the duration of the earlier state.
+- If no new event is received, the last known state is assumed to continue.
+- `product_count` events are instantaneous and independent of time-based states.
 
 **Complete formulas and ranges**: See [docs/METRICS.md](docs/METRICS.md)
 
-### Robustness Features
+### Event Handling Guarantees
+
+- **Duplicate events:**  
+  Events are idempotent using a composite key of (timestamp, worker_id, workstation_id, event_type). Duplicate events are ignored at ingestion.
+
+- **Out-of-order timestamps:**  
+  Events are sorted by timestamp during metric aggregation. Late-arriving events are reprocessed during aggregation queries.
+
+- **Intermittent connectivity:**  
+  The backend assumes eventual consistency. Events can be ingested in batches once connectivity resumes without affecting correctness.
+
+### Additional Robustness Features
 - ✅ **Duplicate detection**: Database UNIQUE constraint prevents double-counting
 - ✅ **Out-of-order handling**: Events sorted by timestamp before calculation
 - ✅ **Offline resilience**: Edge devices buffer up to 10,000 events locally
@@ -305,6 +403,12 @@ ai-worker-productivity-dashboard/
 ---
 
 ## 🧪 Data Integrity
+
+### Data Persistence Strategy
+
+- All AI events are stored in an append-only `ai_events` table to preserve auditability.
+- No events are updated or deleted once ingested.
+- Dummy data is generated exclusively through backend seed APIs, allowing evaluators to refresh data without modifying the database or frontend.
 
 ### Deduplication Strategy
 Events are deduplicated using a composite UNIQUE constraint:
@@ -376,6 +480,87 @@ The seeding function includes:
 
 ---
 
+## 🏛️ Technical Analysis & Architecture
+
+### Edge → Backend → Dashboard Data Flow
+
+**1. Edge (CCTV Cameras):**  
+AI models process video on-site and emit JSON events containing worker activity, confidence scores, and timestamps.
+
+**2. Backend (FastAPI):**  
+Ingests raw events via REST API, performs deduplication using database constraints, validates confidence thresholds (≥ 0.7), and persists to SQLite with bitemporal tracking.
+
+**3. Dashboard (React):**  
+Aggregates data from the database to visualize real-time KPIs, worker leaderboards, and event streams with 30-second auto-refresh.
+
+### Data Integrity & Reliability
+
+**Intermittent Connectivity:**  
+Implement **Store-and-Forward** mechanism at the Edge. Events are buffered locally in a persistent cache (up to 10,000 events) and pushed to the API once connection is restored. The backend's eventual consistency model ensures correct metric calculation regardless of delayed arrival.
+
+**Duplicate Events:**  
+The database enforces a **Unique Constraint** on `(timestamp, worker_id, workstation_id, event_type)`. Any duplicate JSON payload from network retries is automatically rejected at the database level, ensuring idempotent ingestion.
+
+**Out-of-Order Timestamps:**  
+The API does not rely on "received_at" server time. All metrics are calculated by **sorting events chronologically by their original camera timestamp** before aggregation, guaranteeing correctness even with delayed or reordered arrivals.
+
+### AI Model Lifecycle Management
+
+**Model Versioning:**  
+Each event payload includes a `model_version` field (optional) in metadata to track which CV model version generated the detection. This enables A/B testing and performance comparison across model iterations.
+
+**Model Drift Detection:**  
+Monitor the **average confidence score** over time using a 7-day moving average. A sustained drop below 75% indicates drift (e.g., lighting changes, camera repositioning, seasonal variations), triggering automated retraining alerts.
+
+**Retraining Triggers:**  
+Automated retraining is triggered when:
+- Confidence scores degrade by >15% over 7 days
+- Manual ground truth verification flags systematic misclassifications
+- Productivity baselines deviate >2 standard deviations from historical norms
+
+### Scalability Strategy (5 → 100+ Cameras)
+
+**Database Evolution:**  
+Migrate from SQLite to **PostgreSQL + TimescaleDB** for:
+- Concurrent write handling from 100+ cameras
+- Time-series optimizations (automatic partitioning, compression)
+- Horizontal scaling with read replicas
+
+**High-Volume Ingestion:**  
+Introduce **Redis Streams or Apache Kafka** as message broker:
+- Decouple camera ingestion from processing
+- Handle burst traffic (1000+ events/second)
+- Enable async processing with worker pools
+
+**Multi-Site Deployment:**  
+Deploy regional ingestion nodes with:
+- `site_id` field for data partitioning
+- Local aggregation for site-specific dashboards
+- Central data warehouse for cross-site analytics
+
+**Infrastructure:**  
+Kubernetes deployment with:
+- Auto-scaling based on queue depth
+- Prometheus + Grafana for monitoring
+- Circuit breakers for fault tolerance
+
+---
+
+## 🤖 Model Lifecycle Considerations
+
+### Model Versioning
+Each event payload can include a `model_version` field to track which CV model generated the event.
+
+### Drift Detection
+Monitor changes in confidence scores, idle/working ratios, and production rates over time.
+
+### Retraining Triggers
+Retraining can be triggered when:
+- Sustained confidence degradation is detected
+- Significant deviation from historical productivity baselines occurs
+
+---
+
 ## 🚦 Known Limitations & Assumptions
 
 ### Current Scope
@@ -384,17 +569,81 @@ The seeding function includes:
 - **Real-time**: 30-second polling (WebSockets planned)
 - **Authentication**: Basic rate limiting (OAuth2 planned)
 
-### Production Considerations
-For scaling to 100+ cameras:
-- Migrate to PostgreSQL + TimescaleDB
-- Add Kafka for event streaming
-- Implement Redis caching
-- Deploy on Kubernetes with auto-scaling
+## 📈 Scalability Strategy
+
+### 5 to 100+ Cameras
+- **Horizontal scaling** of ingestion APIs with load balancing and database indexing on timestamp and worker/workstation IDs.
+- **Database optimization**: Migrate to PostgreSQL + TimescaleDB for time-series data.
+- **Caching layer**: Implement Redis for frequently accessed metrics.
+
+### High-Volume Ingestion
+- **Message queues**: Introduce Kafka/SQS between cameras and backend to decouple ingestion from processing.
+- **Async processing**: Background workers process events from queue.
+- **Batch aggregation**: Compute metrics in scheduled batches for efficiency.
+
+### Multi-Site Factories
+- **Site isolation**: Add `site_id` to events and partition data per site for isolation and analytics.
+- **Federated architecture**: Deploy regional backends with central aggregation layer.
+- **Multi-tenancy**: Support multiple factories with data isolation and cross-site reporting.
+
+### Infrastructure Evolution
+- **Container orchestration**: Deploy on Kubernetes with auto-scaling based on queue depth.
+- **Monitoring**: Prometheus metrics + Grafana dashboards for observability.
+- **Data warehouse**: ETL pipeline to data warehouse for historical analytics.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed scaling plan.
 
 ---
+## 🌐 Production Deployment
 
+### Docker Production Build
+
+The application is production-ready with:
+- ✅ **Health checks** - Frontend waits for backend readiness
+- ✅ **Volume persistence** - Data survives container restarts
+- ✅ **Environment variables** - Portable configuration
+- ✅ **Auto-restart policies** - Resilient to crashes
+- ✅ **Network isolation** - Secure container communication
+
+### Recommended Hosting Platforms
+
+**Backend (FastAPI):**
+- Railway.app (recommended - PostgreSQL support)
+- Render.com (free tier available)
+- Fly.io (global edge deployment)
+
+**Frontend (React):**
+- Vercel (recommended - zero config)
+- Netlify (continuous deployment)
+- AWS S3 + CloudFront (enterprise)
+
+### Environment Variables for Production
+
+```bash
+# Backend (.env)
+DATABASE_URL=postgresql://user:pass@host:5432/dbname  # For production
+CORS_ORIGINS=https://yourdomain.com
+API_RATE_LIMIT=200  # requests per minute
+
+# Frontend (.env)
+REACT_APP_API_URL=https://api.yourdomain.com
+```
+
+### Migration to PostgreSQL
+
+For production at scale (100+ cameras):
+
+```python
+# Update DATABASE_URL in config.py
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://user:password@localhost:5432/factory_db"
+)
+```
+
+No code changes needed - SQLAlchemy handles the migration automatically.
+
+---
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE) file for details.

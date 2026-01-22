@@ -35,6 +35,7 @@ function App() {
     const [seeding, setSeeding] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [hideLowConfidence, setHideLowConfidence] = useState(false);
+    const [selectedWorker, setSelectedWorker] = useState<string>("ALL");
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -99,8 +100,13 @@ function App() {
     }, [loadData]);
 
     const leaderboard = useMemo(
-        () => [...workers].sort((a, b) => b.utilization_percentage - a.utilization_percentage).slice(0, 8),
-        [workers]
+        () => {
+            const filtered = selectedWorker === "ALL"
+                ? workers
+                : workers.filter(w => w.worker_id === selectedWorker);
+            return [...filtered].sort((a, b) => b.utilization_percentage - a.utilization_percentage).slice(0, 8);
+        },
+        [workers, selectedWorker]
     );
 
     const barData = useMemo(() => ({
@@ -155,21 +161,39 @@ function App() {
                             <h1 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Productivity Command Center</h1>
                             <p className="mt-2 text-sm text-slate-300">Live factory telemetry, AI-detected events, and utilization KPIs in one view.</p>
                         </div>
-                        <div className="flex gap-3">
-                            <button
-                                onClick={handleAdminSeedRefresh}
-                                disabled={seeding}
-                                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-slate-100 transition hover:-translate-y-[1px] hover:border-cyan-400/50 hover:bg-white/10 disabled:opacity-50"
-                            >
-                                {seeding ? "Refreshing..." : "Refresh Data"}
-                            </button>
-                            <button
-                                onClick={() => handleSeed(true)}
-                                disabled={seeding}
-                                className="rounded-xl bg-gradient-to-r from-cyan-400 via-indigo-500 to-fuchsia-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-indigo-900/40 transition hover:-translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                                {seeding ? "Seeding..." : "Reseed sample data"}
-                            </button>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                            <div className="flex flex-col gap-1">
+                                <label htmlFor="worker-filter" className="text-xs uppercase tracking-wide text-slate-400">Filter by Worker</label>
+                                <select
+                                    id="worker-filter"
+                                    value={selectedWorker}
+                                    onChange={(e) => setSelectedWorker(e.target.value)}
+                                    className="rounded-lg border border-white/10 bg-slate-800/80 px-3 py-2 text-sm text-slate-100 transition hover:border-cyan-400/50 focus:border-cyan-400 focus:outline-none"
+                                >
+                                    <option value="ALL">All Workers</option>
+                                    {workers.map(w => (
+                                        <option key={w.worker_id} value={w.worker_id}>
+                                            {w.worker_name || w.worker_id}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="flex gap-3 sm:mt-5">
+                                <button
+                                    onClick={handleAdminSeedRefresh}
+                                    disabled={seeding}
+                                    className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-slate-100 transition hover:-translate-y-[1px] hover:border-cyan-400/50 hover:bg-white/10 disabled:opacity-50"
+                                >
+                                    {seeding ? "Refreshing..." : "Refresh Data"}
+                                </button>
+                                <button
+                                    onClick={() => handleSeed(true)}
+                                    disabled={seeding}
+                                    className="rounded-xl bg-gradient-to-r from-cyan-400 via-indigo-500 to-fuchsia-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-indigo-900/40 transition hover:-translate-y-[1px] disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {seeding ? "Seeding..." : "Reseed sample data"}
+                                </button>
+                            </div>
                         </div>
                     </div>
 
