@@ -1,4 +1,5 @@
-version: '3.8'
+# Docker Compose configuration for AI Worker Productivity Dashboard
+# No version needed for Docker Compose v2+ (version attribute is obsolete)
 
 services:
   backend:

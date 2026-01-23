@@ -58,3 +58,6 @@ logs/
 
 # Environment
 .env
+
+# Duplicate nested folder (should not exist)
+ai-worker-productivity-dashboard/

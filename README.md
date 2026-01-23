@@ -15,6 +15,43 @@ Real-time monitoring and analysis of worker productivity through AI-powered CCTV
 
 ---
 
+## 🚀 Quick Start
+
+Get the dashboard running in **under 60 seconds** with Docker:
+
+```bash
+# Clone the repository
+git clone https://github.com/bhartiinsan/ai-worker-productivity-dashboard.git
+cd ai-worker-productivity-dashboard
+
+# Start with Docker Compose (builds and runs everything)
+docker-compose up --build
+
+# Access the dashboard
+# Frontend: http://localhost:3000
+# Backend API: http://localhost:8000
+# API Docs: http://localhost:8000/docs
+```
+
+The system automatically seeds 24 hours of realistic factory data on first run.
+
+**Without Docker:**
+```bash
+# Backend
+cd backend
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+
+# Frontend (new terminal)
+cd frontend
+npm install
+npm start
+```
+
+---
+
 ## 📸 Screenshots
 
 ### Dashboard Overview - Real-time KPI Monitoring
@@ -103,6 +140,89 @@ CCTV Cameras → AI Detection → FastAPI Backend → SQLite Database → React 
 
 ---
 
+## 🧩 Database Schema
+
+**Entity-Relationship Diagram** (Bitemporal Event Sourcing):
+
+```mermaid
+erDiagram
+    WORKER ||--o{ AI_EVENT : generates
+    WORKSTATION ||--o{ AI_EVENT : receives
+    
+    WORKER {
+        int id PK
+        string name
+        datetime created_at
+        datetime updated_at
+    }
+    
+    WORKSTATION {
+        int id PK
+        string name
+        string location
+        datetime created_at
+        datetime updated_at
+    }
+    
+    AI_EVENT {
+        int id PK
+        datetime timestamp "Event Time (Source)"
+        int worker_id FK
+        int workstation_id FK
+        string event_type "working|idle|absent|product_count"
+        float confidence "0.7-1.0"
+        int count "NULL for state, INT for products"
+        datetime created_at "Server Ingestion Time"
+    }
+```
+
+**Bitemporal Tracking:**
+- `timestamp` = **Event time** (when the event actually occurred at the edge device)
+- `created_at` = **Server time** (when the event was ingested into the database)
+- Enables retroactive analysis and late-arriving event handling
+
+**Composite Unique Constraint:**  
+`(timestamp, worker_id, workstation_id, event_type)` prevents duplicate event ingestion.
+
+**Indexes:**  
+- `worker_id`, `workstation_id`, `event_type` (for fast filtering)
+- `timestamp` (for chronological sorting)
+
+---
+
+## 📈 Business Impact
+
+### Problem Solved
+
+**Production Bottleneck Identification:**  
+Traditional factory monitoring relies on manual reporting or end-of-shift summaries. This creates blind spots where low-productivity workers or malfunctioning workstations go undetected for hours, resulting in:
+- ❌ Wasted labor costs (idle workers paid for unproductive hours)
+- ❌ Missed production targets
+- ❌ Delayed maintenance interventions
+
+### Solution Value
+
+This dashboard provides **real-time visibility** into:
+1. **Worker Performance** → Identify underperforming workers for retraining or reassignment
+2. **Workstation Efficiency** → Detect equipment failures via sudden idle time spikes
+3. **Production Forecasting** → Predict daily output based on current throughput rates
+
+**ROI Example:**  
+- Factory with 50 workers × $20/hour average wage = $1,000/hour labor cost
+- 10% idle time reduction = **$800/day in recovered productivity**
+- System cost: ~$500/month (AWS hosting) → **Payback in < 1 day**
+
+### Use Cases
+
+| Stakeholder | Use Case | Metric Monitored |
+|-------------|----------|------------------|
+| **Factory Manager** | Identify underperforming shifts | Factory-wide utilization % |
+| **HR Director** | Objective performance reviews | Individual units per hour |
+| **Maintenance Team** | Predict equipment failures | Workstation idle time trends |
+| **Production Planner** | Adjust daily targets | Real-time throughput rate |
+
+---
+
 ## 🚀 Quick Start
 
 ### 🎯 Zero-Configuration Docker Setup
@@ -115,10 +235,10 @@ docker compose up --build
 
 # Option 2: Using provided startup scripts
 # Linux/macOS:
-./run_app.sh
+./scripts/run_app.sh
 
 # Windows:
-run_app.bat
+scripts\run_app.bat
 ```
 
 **What happens automatically:**
@@ -291,14 +411,22 @@ ai-worker-productivity-dashboard/
 ├── README.md                      # This file
 ├── LICENSE                        # MIT License
 ├── docker-compose.yml             # Container orchestration
-├── manage.ps1                     # PowerShell workflow manager
-├── LAUNCH.bat                     # Windows quick start
+├── .gitignore                     # Git exclusions
+│
+├── scripts/                       # Deployment scripts
+│   ├── LAUNCH.bat                 # Windows quick start
+│   ├── run_app.bat                # Windows deployment
+│   └── run_app.sh                 # Linux/macOS deployment
+│
+├── .github/                       # GitHub metadata
+│   └── REPOSITORY_METADATA.md     # Topics & tags guide
 │
 ├── docs/                          # Extended documentation
 │   ├── ARCHITECTURE.md            # Deep dive into system design
 │   ├── CONFIGURATION.md           # Environment variable guide
 │   ├── CONTRIBUTING.md            # Contribution guidelines
 │   ├── DASHBOARD-GUIDE.md         # UI component reference
+│   ├── METRICS.md                 # Complete metric formulas
 │   └── images/                    # Screenshots
 │       ├── dashboard-overview.png
 │       ├── worker-leaderboard.png
@@ -307,14 +435,15 @@ ai-worker-productivity-dashboard/
 ├── backend/                       # FastAPI application
 │   ├── app/
 │   │   ├── main.py               # API entry point
-│   │   ├── models.py             # Database schema
+│   │   ├── models.py             # Database schema (indexed)
 │   │   ├── schemas.py            # Pydantic validation
 │   │   ├── database.py           # SQLAlchemy setup
 │   │   ├── crud.py               # Database operations
 │   │   ├── config.py             # Configuration
+│   │   ├── middleware.py         # GZip compression
 │   │   └── services/             # Business logic
 │   │       ├── events_service.py # Event ingestion
-│   │       ├── metrics_service.py # KPI computation
+│   │       ├── metrics_service.py # KPI computation (formulas)
 │   │       └── seed_service.py   # Data generation
 │   ├── requirements.txt
 │   ├── Dockerfile
@@ -322,7 +451,7 @@ ai-worker-productivity-dashboard/
 │
 └── frontend/                      # React application
     ├── src/
-    │   ├── App.tsx               # Main dashboard
+    │   ├── App.tsx               # Main dashboard (5s refresh)
     │   ├── types.ts              # TypeScript interfaces
     │   └── services/
     │       └── api.ts            # API client
@@ -336,6 +465,108 @@ ai-worker-productivity-dashboard/
 ---
 
 ## 📊 Metrics & Data Integrity
+
+### 🔢 Metric Formulas (Mathematical Definitions)
+
+All metrics are computed using a **state-duration model** with explicit mathematical definitions:
+
+#### 1. **Worker Utilization Percentage**
+
+$$
+\text{Utilization}_{\text{worker}} = \frac{T_{\text{active}}}{T_{\text{active}} + T_{\text{idle}}} \times 100
+$$
+
+Where:
+- $T_{\text{active}}$ = Total time in `working` state (seconds)
+- $T_{\text{idle}}$ = Total time in `idle` state (seconds)
+- State duration = Time from event timestamp to next state-change event
+- Maximum state duration capped at 600 seconds (10 minutes)
+
+**Range:** 0% (never working) to 100% (always working)
+
+#### 2. **Units Per Hour (Worker Productivity)**
+
+$$
+\text{Units/Hour}_{\text{worker}} = \frac{\sum \text{product\_count}}{\frac{T_{\text{active}}}{3600}}
+$$
+
+Where:
+- $\sum \text{product\_count}$ = Sum of all `count` values from `product_count` events
+- $T_{\text{active}}$ converted to hours
+- Only counts time in `working` state (idle time excluded)
+
+**Range:** 0 (no production) to theoretically unlimited (typical: 10-50 units/hour)
+
+#### 3. **Throughput Rate (Workstation Efficiency)**
+
+$$
+\text{Throughput}_{\text{station}} = \frac{\sum \text{product\_count}_{\text{all workers}}}{T_{\text{occupancy}} / 3600}
+$$
+
+Where:
+- $T_{\text{occupancy}}$ = Total time any worker was present (working OR idle)
+- Measures equipment effectiveness independent of operator skill
+
+**Range:** Lower than Units/Hour (accounts for idle time)
+
+#### 4. **Factory-Wide Production Rate**
+
+$$
+\text{Production Rate}_{\text{factory}} = \frac{1}{N} \sum_{i=1}^{N} \text{Units/Hour}_{\text{worker}_i}
+$$
+
+Where:
+- $N$ = Number of active workers (with events in last 24 hours)
+- Weighted average across all workers
+
+---
+
+### 🔍 Data Quality & Assumptions
+
+#### State-Duration Model
+
+**Core Assumption:**  
+Each state event (`working`, `idle`, `absent`) represents the worker's status until the next state-change event.
+
+**Duration Calculation:**
+```python
+duration = min(
+    next_event_timestamp - current_event_timestamp,
+    600  # 10-minute maximum cap
+)
+```
+
+**Rationale:**  
+- Prevents infinite durations if worker leaves factory without explicit `absent` event
+- Mirrors typical CCTV re-identification intervals (5-10 minutes)
+
+#### Handling Edge Cases
+
+| Scenario | Handling | Impact on Metrics |
+|----------|----------|-------------------|
+| **Worker leaves without `absent` event** | Last state capped at 10 minutes | Prevents infinite idle/working time |
+| **Duplicate events (same timestamp + type)** | Ignored via UNIQUE constraint | No impact (idempotent) |
+| **Out-of-order events** | Sorted by timestamp during aggregation | Corrected during query time |
+| **Confidence < 0.7** | Rejected at ingestion | Only high-confidence events counted |
+| **`product_count` without `working` state** | Still counted in total production | Allows for manual entry corrections |
+
+#### Absent vs Idle Distinction
+
+- **Idle**: Worker present at workstation but not producing (e.g., waiting for materials)
+- **Absent**: Worker not detected by any CCTV camera for >10 minutes
+
+**Data Quality Rule:**  
+If no event received for worker in 10+ minutes → implicitly marked `absent` in real-time queries (not stored in DB).
+
+#### Deduplication Logic
+
+**Composite Key:** `(timestamp, worker_id, workstation_id, event_type)`
+
+**Why not include `count`?**  
+- `product_count` events may have same timestamp but different counts (e.g., batch production)
+- State events (`working`, `idle`) never have counts → always unique by timestamp
+
+---
 
 ### Metric Definitions & Formulas
 
