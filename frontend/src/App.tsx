@@ -162,7 +162,16 @@ function App() {
                 <header className="flex flex-col gap-6 rounded-3xl border border-white/10 bg-gradient-to-br from-slate-900/80 via-slate-900/60 to-indigo-900/60 p-8 shadow-card backdrop-blur">
                     <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                         <div>
-                            <p className="text-xs uppercase tracking-[0.35em] text-cyan-200">AI Worker Intelligence</p>
+                            <div className="flex items-center gap-3">
+                                <p className="text-xs uppercase tracking-[0.35em] text-cyan-200">AI Worker Intelligence</p>
+                                <div className="flex items-center gap-2">
+                                    <span className="relative flex h-2.5 w-2.5">
+                                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                                        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
+                                    </span>
+                                    <span className="text-[10px] uppercase tracking-wider text-emerald-400 font-medium">Live</span>
+                                </div>
+                            </div>
                             <h1 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Productivity Command Center</h1>
                             <p className="mt-2 text-sm text-slate-300">Live factory telemetry, AI-detected events, and utilization KPIs in one view.</p>
                         </div>
