@@ -36,6 +36,7 @@ function App() {
     const [error, setError] = useState<string | null>(null);
     const [hideLowConfidence, setHideLowConfidence] = useState(false);
     const [selectedWorker, setSelectedWorker] = useState<string>("ALL");
+    const [selectedWorkstation, setSelectedWorkstation] = useState<string>("ALL");
 
     const loadData = useCallback(async (isRefresh = false) => {
         // Only show loading spinner on initial load, not on auto-refresh
@@ -80,7 +81,7 @@ function App() {
         setSeeding(true);
         setError(null);
         try {
-            await seedDatabase(clearExisting, 24);
+            await seedDatabase(clearExisting, 48);
             await loadData();
         } catch (err) {
             console.error(err);
@@ -112,6 +113,15 @@ function App() {
             return [...filtered].sort((a, b) => b.utilization_percentage - a.utilization_percentage).slice(0, 8);
         },
         [workers, selectedWorker]
+    );
+
+    const filteredWorkstations = useMemo(
+        () => {
+            return selectedWorkstation === "ALL"
+                ? workstations
+                : workstations.filter(ws => ws.workstation_id === selectedWorkstation);
+        },
+        [workstations, selectedWorkstation]
     );
 
     const barData = useMemo(() => ({
@@ -188,6 +198,22 @@ function App() {
                                     {workers.map(w => (
                                         <option key={w.worker_id} value={w.worker_id}>
                                             {w.worker_name || w.worker_id}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="flex flex-col gap-1">
+                                <label htmlFor="workstation-filter" className="text-xs uppercase tracking-wide text-slate-400">Filter by Workstation</label>
+                                <select
+                                    id="workstation-filter"
+                                    value={selectedWorkstation}
+                                    onChange={(e) => setSelectedWorkstation(e.target.value)}
+                                    className="rounded-lg border border-white/10 bg-slate-800/80 px-3 py-2 text-sm text-slate-100 transition hover:border-cyan-400/50 focus:border-cyan-400 focus:outline-none"
+                                >
+                                    <option value="ALL">All Workstations</option>
+                                    {workstations.map(ws => (
+                                        <option key={ws.workstation_id} value={ws.workstation_id}>
+                                            {ws.workstation_id}
                                         </option>
                                     ))}
                                 </select>
@@ -388,7 +414,7 @@ function App() {
                         <div className="text-xs text-slate-400">Real-time occupancy + throughput</div>
                     </div>
                     <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                        {workstations.map((station) => (
+                        {filteredWorkstations.map((station) => (
                             <div
                                 key={station.workstation_id}
                                 className="rounded-2xl border border-white/5 bg-white/5 p-4 shadow-inner"

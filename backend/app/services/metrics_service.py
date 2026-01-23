@@ -93,7 +93,9 @@ def worker_metrics(
     
     1. **Utilization Percentage**
        Formula: (working_hours / elapsed_hours) × 100
+       Equivalent: (Total Working Minutes / Total Observed Minutes) × 100
        Range: [0%, 100%]
+       Precision: Calculated at second-level granularity, converted to hours
        Interpretation: 
          - 95% = worker spent 95% of shift actively working
          - 40% = worker idle/absent 60% of shift (investigate)
