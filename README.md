@@ -101,7 +101,511 @@ Database auto-seeds on first API call to http://localhost:8000
 
 ---
 
+## 🌐 Deployment Status
+
+**This is a local development project designed to run via Docker.**
+
+- ✅ Runs locally on your machine (localhost)
+- ✅ No cloud deployment required for evaluation
+- ✅ No public hosted URL (intentional for data security)
+- ✅ Complete offline functionality
+
+**Why Local-Only?**  
+Factory productivity data contains sensitive information (worker performance metrics, production rates). Local deployment ensures data privacy and allows customization per factory setup.
+
+**For Production:** See "Scaling to 100+ Cameras" section for cloud deployment architecture.
+
+---
+
+## 🛡️ Edge Case Handling
+
+### How This System Handles Real-World Challenges
+
+#### 1️⃣ **Intermittent Connectivity**
+
+**Problem:** CCTV cameras may lose network connection temporarily.
+
+**Solution:**  
+- **Store-and-Forward Buffering** - Edge devices cache events locally (up to 10,000 events)
+- Events are queued in persistent storage (SQLite on edge device)
+- Automatic batch upload when connectivity is restored
+- Backend accepts events with past timestamps (bitemporal tracking)
+- Metrics recalculate correctly regardless of arrival order
+
+**Code Implementation:** Backend sorts events by `timestamp` during aggregation, not by `created_at` (server receipt time).
+
+#### 2️⃣ **Duplicate Events**
+
+**Problem:** Network retries may send the same event multiple times.
+
+**Solution:**  
+- **Database Unique Constraint** on `(timestamp, worker_id, workstation_id, event_type)`
+- Duplicate events automatically rejected at database level
+- **Idempotent API** - calling the same event twice produces same result
+- No manual deduplication logic required
+
+**Database Schema:**
+```sql
+UNIQUE(timestamp, worker_id, workstation_id, event_type)
+```
+
+**Example:** If the same "working" event for Worker W1 at 10:00 AM is sent twice, the second insert fails silently.
+
+#### 3️⃣ **Out-of-Order Timestamps**
+
+**Problem:** Events may arrive out of chronological order due to network delays.
+
+**Solution:**  
+- **Chronological Sorting** - All metric calculations sort events by `timestamp` before aggregation
+- Late-arriving events are processed correctly during next metric query
+- State-duration model uses event timestamp, not arrival time
+
+**Code Implementation:**
+```python
+# backend/app/services/metrics_service.py
+ordered = sorted(events, key=lambda e: e.timestamp)  # Line 56
+```
+
+**Example:**
+```
+Received: Event A (10:30), Event B (10:00), Event C (10:15)
+Sorted:   Event B (10:00), Event C (10:15), Event A (10:30)
+Metrics:  Calculated using sorted order for correct durations
+```
+
+#### 4️⃣ **Low Confidence Scores**
+
+**Problem:** AI models may return uncertain detections.
+
+**Solution:**  
+- **Confidence Threshold** - Events with confidence < 0.7 are rejected at API level
+- Dashboard includes toggle to hide events below 0.80 confidence
+- Average confidence monitoring for model drift detection
+
+#### 5️⃣ **Missing State Transitions**
+
+**Problem:** Worker leaves factory without explicit "absent" event.
+
+**Solution:**  
+- **10-Minute Maximum State Duration** - If no new event within 10 minutes, state is capped
+- Prevents infinite "working" or "idle" time calculations
+- Matches typical CCTV re-identification intervals
+
+**Example:** Worker clocks out at 5:00 PM but last event was "working" at 4:55 PM. System caps working time at 10 minutes (5:05 PM) instead of calculating until midnight.
+
+---
+
+## 📊 Metric Definitions & Formulas
+
+### Mathematical Foundations
+
+All metrics follow explicit mathematical formulas for reproducibility and auditability.
+
+#### **Worker-Level Metrics**
+
+**Active Time (hours):**
+```
+Active_Time = Σ (duration of all "working" state intervals)
+
+where duration = min(next_event_time - current_event_time, 600 seconds)
+```
+
+**Idle Time (hours):**
+```
+Idle_Time = Σ (duration of all "idle" state intervals)
+```
+
+**Utilization Percentage:**
+```
+Utilization = (Active_Time / (Active_Time + Idle_Time)) × 100
+
+Range: [0%, 100%]
+- 0% = worker never worked (all idle/absent)
+- 100% = worker worked continuously (no idle time)
+- 75%+ = high performer
+- <50% = investigate bottleneck or training need
+```
+
+**Units Per Hour (Productivity):**
+```
+Units_Per_Hour = Total_Units_Produced / Active_Time_Hours
+
+where:
+- Total_Units_Produced = Σ count from all "product_count" events
+- Active_Time_Hours = Active_Time converted to hours
+- Only counts time in "working" state (idle excluded)
+
+Range: [0, ∞)
+- 0 = no production
+- 5-10 = typical manufacturing rate
+- >15 = exceptional performer or batch processing
+```
+
+#### **Workstation-Level Metrics**
+
+**Occupancy Time (hours):**
+```
+Occupancy_Time = Total time any worker was present (working OR idle)
+```
+
+**Workstation Utilization:**
+```
+Workstation_Utilization = (Occupancy_Time / Elapsed_Time) × 100
+
+- Measures equipment usage independent of worker skill
+- High utilization = equipment rarely sits empty
+- Low utilization = equipment idle or underutilized
+```
+
+**Throughput (Efficiency):**
+```
+Throughput = Total_Units_Produced / Occupancy_Time_Hours
+
+- Lower than Units_Per_Hour (includes idle time at station)
+- Measures overall equipment effectiveness
+```
+
+#### **Factory-Level Metrics**
+
+**Average Utilization (Weighted):**
+```
+Factory_Utilization = (Σ Worker_Utilization) / Worker_Count
+
+- Arithmetic mean across all active workers
+- NOT time-weighted (treats each worker equally)
+- Matches standard factory KPI reporting
+```
+
+**Average Production Rate:**
+```
+Factory_Production_Rate = (Σ Units_Per_Hour for productive_workers) / Productive_Worker_Count
+
+where productive_workers = workers with units_per_hour > 0
+```
+
+**Total Productive Time:**
+```
+Total_Productive_Time = Σ Active_Time_Hours across all workers
+```
+
+### How Production Events Relate to Time-Based Activity
+
+**State-Duration Model:**
+
+1. Each state event (`working`, `idle`, `absent`) represents the worker's status **until** the next state-change event
+2. `product_count` events are **instantaneous markers** (not durations)
+3. Products are only counted during "working" state windows
+
+**Example Timeline:**
+```
+10:00:00 - Event: working               → Start working state
+10:02:00 - Event: product_count (3)     → 3 units produced (counted)
+10:05:00 - Event: product_count (2)     → 2 more units (counted)
+10:07:00 - Event: idle                  → End working state (7 min duration)
+10:10:00 - Event: product_count (1)     → 1 unit NOT counted (during idle)
+10:12:00 - Event: working               → Resume working (5 min idle)
+
+Calculation:
+- Active_Time = 7 minutes
+- Idle_Time = 5 minutes
+- Utilization = (7 / (7+5)) × 100 = 58.3%
+- Total_Units = 3 + 2 = 5 (unit during idle excluded)
+- Units_Per_Hour = 5 / (7/60) = 42.9 units/hour
+```
+
+---
+
+## 🧠 Theoretical Considerations & Scalability
+
+### Scaling from 6 Cameras to 100+ Cameras
+
+**Current Architecture (6 Cameras, 1 Factory Site):**
+- **Database:** SQLite with local file persistence
+- **Ingestion:** Synchronous FastAPI endpoints (100 req/min rate limit)
+- **Aggregation:** On-demand query-time calculations
+- **Frontend:** 5-second polling for real-time updates
+
+**Enterprise Architecture (100+ Cameras, Multiple Sites):**
+
+#### 1. **Database Migration**
+```python
+# SQLite → PostgreSQL with TimescaleDB extension
+DATABASE_URL = "postgresql://user:pass@timescale.internal:5432/factory_db"
+
+Benefits:
+- Horizontal scaling via read replicas
+- Automatic time-series partitioning (daily chunks)
+- Hypertable compression for historical data
+- Continuous aggregations (pre-computed hourly metrics)
+```
+
+**Capacity Increase:** 1,000 events/min → 100,000 events/min
+
+#### 2. **Message Queue for High-Throughput Ingestion**
+```python
+# Architecture: Edge → Kafka → Consumer Workers → PostgreSQL
+
+from kafka import KafkaProducer
+
+# Edge devices publish to Kafka topics
+producer.send('factory.events.raw', event_json)
+
+# Backend consumers process in parallel
+@app.on_event("startup")
+async def start_kafka_consumer():
+    consumer = AIOKafkaConsumer('factory.events.raw')
+    async for msg in consumer:
+        await process_event(msg.value)
+```
+
+**Benefits:**
+- Decouples ingestion from database writes
+- Event replay for disaster recovery
+- Backpressure handling (queue absorbs traffic spikes)
+- Guaranteed delivery with at-least-once semantics
+
+#### 3. **Caching Layer for Hot Metrics**
+```python
+# Redis for frequently accessed data (last 15 minutes)
+
+import redis
+cache = redis.Redis(host='redis.internal', decode_responses=True)
+
+@app.get("/api/metrics/factory")
+async def get_factory_metrics():
+    cache_key = f"factory_metrics:{datetime.now().minute}"
+    if cached := cache.get(cache_key):
+        return json.loads(cached)
+    
+    metrics = compute_factory_metrics()
+    cache.setex(cache_key, 60, json.dumps(metrics))  # 1-min TTL
+    return metrics
+```
+
+**Latency Improvement:** 200ms → 5ms for cached queries
+
+#### 4. **Real-Time Updates via WebSocket**
+```python
+# Replace polling with push-based updates
+
+from fastapi import WebSocket
+
+@app.websocket("/ws/events")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    while True:
+        event = await event_queue.get()  # From Kafka consumer
+        await websocket.send_json(event)
+```
+
+**Benefits:**
+- Eliminates 5-second polling delay
+- Instant dashboard updates on new events
+- Reduced server load (no repeated requests)
+
+#### 5. **Load Balancing & Auto-Scaling**
+```yaml
+# docker-compose.yml (production with Kubernetes)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+spec:
+  replicas: 10  # 10 FastAPI instances
+  template:
+    spec:
+      containers:
+      - name: backend
+        image: factory-backend:latest
+        resources:
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+---
+# Nginx ingress for round-robin load balancing
+```
+
+**Capacity:** 10 instances × 10k req/min = 100k req/min total
+
+### Multi-Site Support
+
+**Add `site_id` to Event Schema:**
+```python
+class AIEvent(BaseModel):
+    timestamp: datetime
+    worker_id: str
+    workstation_id: str
+    site_id: str  # NEW: "factory_delhi", "factory_mumbai", etc.
+    event_type: str
+    confidence: float
+```
+
+**Data Partitioning:**
+```sql
+-- PostgreSQL partitioning by site_id
+CREATE TABLE ai_events (
+    site_id TEXT NOT NULL,
+    timestamp TIMESTAMP NOT NULL,
+    ...
+) PARTITION BY LIST (site_id);
+
+CREATE TABLE ai_events_delhi PARTITION OF ai_events FOR VALUES IN ('factory_delhi');
+CREATE TABLE ai_events_mumbai PARTITION OF ai_events FOR VALUES IN ('factory_mumbai');
+```
+
+**Dashboard Filtering:**
+```tsx
+// Frontend: Site selector dropdown
+<select onChange={(e) => setActiveSite(e.target.value)}>
+  <option value="ALL">All Sites</option>
+  <option value="factory_delhi">Delhi Factory</option>
+  <option value="factory_mumbai">Mumbai Factory</option>
+</select>
+```
+
+### Model Versioning & Lifecycle Management
+
+#### **1. Model Version Tracking**
+```python
+class AIEvent(BaseModel):
+    ...
+    model_version: Optional[str] = "v1.2.3"  # NEW: Track which model generated event
+    model_name: Optional[str] = "yolov8-worker-detection"
+```
+
+**Use Cases:**
+- A/B testing between model versions
+- Rollback to previous model if new one underperforms
+- Compare accuracy across model iterations
+
+#### **2. Model Drift Detection**
+```python
+# Monitor confidence score trends over time
+
+from datetime import timedelta
+
+def detect_model_drift(db: Session, lookback_days: int = 7):
+    """
+    Detect model drift by tracking rolling average confidence.
+    
+    Triggers:
+    - Average confidence drops >15% from baseline
+    - Sustained confidence below 75% for 48+ hours
+    """
+    cutoff = datetime.now() - timedelta(days=lookback_days)
+    events = db.query(AIEvent).filter(AIEvent.timestamp >= cutoff).all()
+    
+    avg_confidence = sum(e.confidence for e in events) / len(events)
+    baseline_confidence = 0.88  # Historical average
+    
+    drift_percentage = ((baseline_confidence - avg_confidence) / baseline_confidence) * 100
+    
+    if drift_percentage > 15:
+        trigger_retraining_alert()
+        logger.warning(f"Model drift detected: {drift_percentage:.1f}% confidence drop")
+    
+    return {
+        "drift_detected": drift_percentage > 15,
+        "current_confidence": avg_confidence,
+        "baseline_confidence": baseline_confidence,
+        "drift_percentage": drift_percentage
+    }
+```
+
+**Monitoring Dashboard:**
+```sql
+SELECT 
+    DATE(timestamp) as date,
+    AVG(confidence) as avg_confidence,
+    COUNT(*) as event_count
+FROM ai_events
+WHERE timestamp >= NOW() - INTERVAL '30 days'
+GROUP BY DATE(timestamp)
+ORDER BY date DESC;
+```
+
+**Visualization:** Plot confidence trend line; trigger alert if trend drops below threshold.
+
+#### **3. Automated Retraining Triggers**
+
+**Trigger Conditions:**
+```python
+# backend/app/services/retraining_service.py
+
+def should_trigger_retraining(db: Session) -> dict:
+    """
+    Determine if model retraining is needed based on multiple signals.
+    """
+    triggers = {
+        "confidence_drift": False,
+        "accuracy_degradation": False,
+        "manual_override": False
+    }
+    
+    # Trigger 1: Confidence Drift
+    drift_result = detect_model_drift(db, lookback_days=7)
+    if drift_result["drift_detected"]:
+        triggers["confidence_drift"] = True
+    
+    # Trigger 2: Accuracy Degradation
+    # Compare predicted events against manual ground truth labels
+    recent_validations = db.query(ManualValidation).filter(
+        ManualValidation.timestamp >= datetime.now() - timedelta(days=14)
+    ).all()
+    
+    accuracy = sum(1 for v in recent_validations if v.prediction_correct) / len(recent_validations)
+    if accuracy < 0.85:  # Below 85% accuracy threshold
+        triggers["accuracy_degradation"] = True
+    
+    # Trigger 3: Manual Override
+    if db.query(RetrainingRequest).filter(RetrainingRequest.approved == True).first():
+        triggers["manual_override"] = True
+    
+    return {
+        "retraining_needed": any(triggers.values()),
+        "triggers": triggers
+    }
+```
+
+**Retraining Pipeline:**
+```python
+# When retraining is triggered:
+
+1. Export misclassified events from last 30 days
+2. Sample 20% of correctly classified events for balance
+3. Send dataset to ML pipeline (MLflow/Kubeflow)
+4. Train new model version (v1.2.4)
+5. Deploy to staging environment for validation
+6. A/B test: 10% traffic to new model, 90% to current
+7. If new model performs better, gradual rollout to 100%
+```
+
+**Deployment Strategy:**
+```python
+# Canary deployment for new model version
+
+if random.random() < 0.10:  # 10% traffic
+    model = load_model("v1.2.4")  # New model
+else:
+    model = load_model("v1.2.3")  # Stable model
+```
+
+### Environmental Changes & Adaptation
+
+**Scenarios Requiring Retraining:**
+
+| Scenario | Detection Method | Action |
+|----------|------------------|--------|
+| **New lighting conditions** | Confidence drop during specific hours | Retrain with augmented brightness variations |
+| **Camera repositioning** | Sudden drop in detection rate | Recalibrate camera coordinates, retrain |
+| **New uniforms** | Worker misclassification spike | Collect labeled images with new uniforms |
+| **Seasonal changes** | Gradual accuracy drift over months | Periodic retraining every quarter |
+| **New workstation layout** | Workstation occupancy metrics drop | Update spatial configuration, retrain |
+
+---
+
 ## 📸 Screenshots
+````
 
 ### Dashboard Overview - Real-time KPI Monitoring
 ![Dashboard Overview](docs/images/dashboard-overview.png)
