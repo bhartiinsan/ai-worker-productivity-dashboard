@@ -37,8 +37,11 @@ function App() {
     const [hideLowConfidence, setHideLowConfidence] = useState(false);
     const [selectedWorker, setSelectedWorker] = useState<string>("ALL");
 
-    const loadData = useCallback(async () => {
-        setLoading(true);
+    const loadData = useCallback(async (isRefresh = false) => {
+        // Only show loading spinner on initial load, not on auto-refresh
+        if (!isRefresh) {
+            setLoading(true);
+        }
         setError(null);
         try {
             const [factoryRes, workersRes, workstationsRes, eventsRes] = await Promise.all([
@@ -54,19 +57,21 @@ function App() {
             setEvents(eventsRes.data);
         } catch (err) {
             console.error(err);
-            setError("Could not load metrics from the API. Check that the backend is running and CORS is allowed.");
+            if (!isRefresh) {
+                setError("Could not load metrics from the API. Check that the backend is running and CORS is allowed.");
+            }
         } finally {
             setLoading(false);
         }
     }, []);
 
     useEffect(() => {
-        loadData();
+        loadData(false);
 
-        // Auto-refresh every 30 seconds for real-time dashboard feel
+        // Auto-refresh every 5 seconds for real-time dashboard feel
         const interval = setInterval(() => {
-            loadData();
-        }, 30000); // 30 seconds
+            loadData(true); // Pass true to indicate this is a refresh
+        }, 5000); // 5 seconds
 
         return () => clearInterval(interval);
     }, [loadData]);

@@ -78,7 +78,7 @@ class AIEvent(Base):
     timestamp = Column(DateTime, nullable=False, index=True)  # Indexed for time-range queries
     worker_id = Column(String, ForeignKey("workers.id"), nullable=False, index=True)
     workstation_id = Column(String, ForeignKey("workstations.id"), nullable=False, index=True)
-    event_type = Column(String, nullable=False)  # working, idle, absent, product_count
+    event_type = Column(String, nullable=False, index=True)  # working, idle, absent, product_count - indexed for filtering
     confidence = Column(Float, nullable=False)  # AI model confidence (0.0 - 1.0)
     count = Column(Integer, default=1)  # Product count for product_count events
     created_at = Column(DateTime, default=datetime.utcnow)  # When record was inserted

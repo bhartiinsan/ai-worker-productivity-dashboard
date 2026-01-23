@@ -7,7 +7,7 @@ Provides functions for:
 - Event querying
 """
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -28,8 +28,8 @@ def get_worker(db: Session, worker_id: str) -> Optional[models.Worker]:
 
 
 def get_workers(db: Session) -> List[models.Worker]:
-    """Get all workers."""
-    return db.query(models.Worker).all()
+    """Get all workers with optimized query."""
+    return db.query(models.Worker).order_by(models.Worker.id).all()
 
 
 def create_worker(db: Session, worker: schemas.WorkerCreate) -> models.Worker:
@@ -51,8 +51,8 @@ def get_workstation(db: Session, workstation_id: str) -> Optional[models.Worksta
 
 
 def get_workstations(db: Session) -> List[models.Workstation]:
-    """Get all workstations."""
-    return db.query(models.Workstation).all()
+    """Get all workstations with optimized query."""
+    return db.query(models.Workstation).order_by(models.Workstation.id).all()
 
 
 def create_workstation(db: Session, workstation: schemas.WorkstationCreate) -> models.Workstation:

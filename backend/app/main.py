@@ -10,10 +10,12 @@ Features:
 - Comprehensive logging
 - Health check endpoints
 - Bitemporal event tracking
+- Response compression for faster data transfer
 """
 
 from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -84,6 +86,9 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         content={"detail": "Rate limit exceeded. Please try again later."}
     )
 
+# Add GZip compression for faster response times
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 # CORS middleware - secure configuration
 app.add_middleware(
     CORSMiddleware,
@@ -91,7 +96,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
-    expose_headers=["X-Total-Count"],
+    expose_headers=["X-Total-Count", "Cache-Control"],
     max_age=600,
 )
 
