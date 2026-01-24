@@ -625,6 +625,80 @@ Sum of `count` from all `product_count` events for the worker/workstation.
 Units per Hour = Total Units Produced / Total Active Hours
 ```
 
+### Formal Metric Definitions
+
+**Production events are aggregated using a State-Duration model where time-based activity events (working, idle, absent) define continuous states, while product_count events are instantaneous markers.**
+
+#### Worker-Level Metrics
+- **Active Time**: Sum of time spent in `working` state between events
+  ```
+  Active_Time = Σ(t_next - t_current) for all events where event_type = 'working'
+  ```
+  
+- **Idle Time**: Sum of time spent in `idle` state between events
+  ```
+  Idle_Time = Σ(t_next - t_current) for all events where event_type = 'idle'
+  ```
+  
+- **Utilization %**: Percentage of available time spent actively working
+  ```
+  Utilization = (Active_Time / (Active_Time + Idle_Time)) × 100
+  Constraint: 0 ≤ Utilization ≤ 100
+  ```
+  
+- **Units Produced**: Sum of `count` values from product_count events
+  ```
+  Units = Σ(count) for all events where event_type = 'product_count'
+  ```
+  
+- **Units per Hour**: Production rate during active working time
+  ```
+  Units_per_Hour = Total_Units_Produced / Active_Time_in_Hours
+  Constraint: Units_per_Hour ≥ 0
+  ```
+
+#### Workstation-Level Metrics
+- **Occupancy Time**: Sum of all time intervals where any worker was present
+  ```
+  Occupancy_Time = Σ(t_next - t_current) where worker_count > 0
+  ```
+  
+- **Utilization %**: Percentage of observation period when station was occupied
+  ```
+  Utilization = (Occupancy_Time / Total_Observation_Period) × 100
+  ```
+  
+- **Throughput Rate**: Units produced per unit of occupancy time
+  ```
+  Throughput = Total_Units_at_Station / Occupancy_Time_in_Hours
+  ```
+
+#### Factory-Level Metrics
+- **Total Productive Time**: Sum of all worker active time
+  ```
+  Total_Productive_Time = Σ(Active_Time) for all workers
+  ```
+  
+- **Total Production Count**: Sum of all units produced
+  ```
+  Total_Production = Σ(Units_Produced) for all workers
+  ```
+  
+- **Average Production Rate**: Factory-wide production efficiency
+  ```
+  Avg_Production_Rate = Total_Production / Total_Productive_Time
+  ```
+  
+- **Average Utilization**: Mean utilization across all workers
+  ```
+  Avg_Utilization = Σ(Worker_Utilization) / Number_of_Workers
+  ```
+
+**Relationship between Production and Activity Events:**
+- Product_count events are **only counted** during time windows when the worker is in `working` state
+- Activity state transitions (working → idle → working) define the temporal boundaries for aggregation
+- Out-of-order events are **sorted by timestamp** before aggregation to ensure deterministic results
+
 ### Assumptions
 
 **Metric Aggregation Model:**  
@@ -637,16 +711,66 @@ We use a **"State-Duration" model** for time-based metrics. Each `working` or `i
 
 **Complete formulas and ranges**: See [docs/METRICS.md](docs/METRICS.md)
 
-### Event Handling Guarantees
+---
 
-- **Duplicate events:**  
-  Events are idempotent using a composite key of (timestamp, worker_id, workstation_id, event_type). Duplicate events are ignored at ingestion.
+## 🛡️ Edge Case Handling
 
-- **Out-of-order timestamps:**  
-  Events are sorted by timestamp during metric aggregation. Late-arriving events are reprocessed during aggregation queries.
+**Explicit handling strategies for production-critical edge cases:**
 
-- **Intermittent connectivity:**  
-  The backend assumes eventual consistency. Events can be ingested in batches once connectivity resumes without affecting correctness.
+### Intermittent Connectivity
+Events generated at the edge are buffered locally in a **persistent queue** (SQLite or file-based) with capacity for up to 10,000 events. When the backend becomes available, buffered events are submitted in batch using the `/api/events/batch` endpoint. The ingestion API is designed to handle retries without data loss through idempotent insertion logic.
+
+**Implementation:**
+```python
+# Edge device pseudocode
+if network_available:
+    send_events_immediately()
+else:
+    buffer_to_local_storage(events)  # Persistent queue
+    
+# On reconnect:
+for batch in chunked(buffered_events, size=100):
+    retry_with_backoff(POST /api/events/batch)
+```
+
+### Duplicate Events
+A composite UNIQUE index on `(timestamp, worker_id, workstation_id, event_type)` ensures duplicates are ignored at the database level. Network retries, replay attacks, or accidental resubmissions are automatically deduplicated without application-level logic.
+
+**Database constraint:**
+```sql
+CREATE UNIQUE INDEX idx_event_dedup 
+ON ai_events(timestamp, worker_id, workstation_id, event_type);
+```
+
+**Behavior:**
+- First submission: Event is inserted (HTTP 201)
+- Duplicate submission: Database rejects (HTTP 201 still returned for idempotency)
+- Result: Metrics remain accurate regardless of retry count
+
+### Out-of-Order Timestamps
+During aggregation, all events are **sorted chronologically by their original timestamp** (not server receive time) before computing time-based metrics. This ensures consistency even when events arrive late due to network delays or buffering.
+
+**Aggregation logic:**
+```python
+def calculate_metrics(events, start_time, end_time):
+    # Critical: Sort by event timestamp, not created_at
+    sorted_events = sorted(events, key=lambda e: e.timestamp)
+    
+    durations = {"working": 0, "idle": 0, "absent": 0}
+    for i in range(len(sorted_events) - 1):
+        state = sorted_events[i].event_type
+        duration = sorted_events[i+1].timestamp - sorted_events[i].timestamp
+        durations[state] += duration
+    
+    return compute_kpis(durations)
+```
+
+**Guarantees:**
+- Late-arriving events are inserted in correct chronological position
+- Metrics are deterministic regardless of arrival order
+- Bitemporal tracking (event_time vs created_at) enables audit trails
+
+---
 
 ### Additional Robustness Features
 - ✅ **Duplicate detection**: Database UNIQUE constraint prevents double-counting
@@ -804,18 +928,82 @@ Kubernetes deployment with:
 
 ---
 
-## 🤖 Model Lifecycle Considerations
+## 🤖 Model Lifecycle Strategy
+
+**Comprehensive approach to managing CV model evolution and maintaining prediction quality:**
 
 ### Model Versioning
-Each event payload can include a `model_version` field to track which CV model generated the event.
+Each event can include a `model_version` field in metadata indicating which version of the computer vision model produced the detection. This enables:
+- **A/B testing**: Compare performance between model versions
+- **Rollback capability**: Revert to previous version if new model underperforms
+- **Performance tracking**: Monitor accuracy, confidence, and latency per version
+
+**Event schema extension:**
+```json
+{
+  "timestamp": "2026-01-21T10:00:00Z",
+  "worker_id": "W1",
+  "event_type": "working",
+  "confidence": 0.95,
+  "model_version": "yolov8n-v2.1.3",
+  "metadata": {
+    "inference_time_ms": 45,
+    "gpu_utilization": 0.67
+  }
+}
+```
 
 ### Drift Detection
-Monitor changes in confidence scores, idle/working ratios, and production rates over time.
+Monitor trends in confidence scores and distributions of output classes to detect when the model's predictions deviate from expected patterns. Drift can be detected when:
+
+**Statistical indicators:**
+- **Confidence score degradation**: 7-day moving average drops below 75% (threshold: 0.75)
+- **Class distribution shift**: Chi-squared test shows p-value < 0.05 for working/idle ratios
+- **Error rate increase**: Manual ground truth validation shows >15% misclassification rate
+
+**Environmental triggers:**
+- Lighting changes (seasonal daylight shifts)
+- Camera repositioning or hardware replacement
+- Introduction of new equipment or workflow changes
+
+**Monitoring dashboard:**
+```python
+# Automated drift detection
+if avg_confidence_7d < 0.75:
+    trigger_alert("Model Drift Detected - Confidence Degradation")
+    
+if kolmogorov_smirnov_test(current_dist, baseline_dist).pvalue < 0.05:
+    trigger_alert("Model Drift Detected - Distribution Shift")
+```
 
 ### Retraining Triggers
-Retraining can be triggered when:
-- Sustained confidence degradation is detected
-- Significant deviation from historical productivity baselines occurs
+When confidence drops or error patterns change persistently, schedule retraining using newly collected labeled data, followed by A/B evaluation before production deployment.
+
+**Automated triggers:**
+1. **Confidence threshold breach**: Average confidence < 75% for 7 consecutive days
+2. **Manual labeling threshold**: 1,000+ newly labeled images available (active learning)
+3. **Performance degradation**: Precision/Recall drops >10% vs baseline
+4. **Scheduled refresh**: Quarterly retraining regardless of metrics (best practice)
+
+**Retraining pipeline:**
+```mermaid
+graph LR
+    A[Drift Detected] --> B[Collect New Labels]
+    B --> C[Retrain Model]
+    C --> D[Validation Set Eval]
+    D --> E{Performance OK?}
+    E -->|Yes| F[A/B Test in Production]
+    E -->|No| G[Tune Hyperparameters]
+    G --> C
+    F --> H{Better than Current?}
+    H -->|Yes| I[Promote to Production]
+    H -->|No| J[Keep Current Model]
+```
+
+**Deployment strategy:**
+- Shadow mode: New model runs in parallel without affecting metrics (1 week)
+- Canary deployment: 10% of cameras use new model (1 week)
+- Full rollout: 100% migration if metrics improve ≥5%
 
 ---
 
@@ -827,27 +1015,191 @@ Retraining can be triggered when:
 - **Real-time**: 30-second polling (WebSockets planned)
 - **Authentication**: Basic rate limiting (OAuth2 planned)
 
+---
+
 ## 📈 Scalability Strategy
 
-### 5 to 100+ Cameras
-- **Horizontal scaling** of ingestion APIs with load balancing and database indexing on timestamp and worker/workstation IDs.
-- **Database optimization**: Migrate to PostgreSQL + TimescaleDB for time-series data.
-- **Caching layer**: Implement Redis for frequently accessed metrics.
+**Clear path from 5 cameras to 100+ cameras and multi-site factory deployments:**
 
-### High-Volume Ingestion
-- **Message queues**: Introduce Kafka/SQS between cameras and backend to decouple ingestion from processing.
-- **Async processing**: Background workers process events from queue.
-- **Batch aggregation**: Compute metrics in scheduled batches for efficiency.
+### Scaling from 5 → 100+ Cameras
 
-### Multi-Site Factories
-- **Site isolation**: Add `site_id` to events and partition data per site for isolation and analytics.
-- **Federated architecture**: Deploy regional backends with central aggregation layer.
-- **Multi-tenancy**: Support multiple factories with data isolation and cross-site reporting.
+**Current architecture limitations:**
+- SQLite: Single-writer bottleneck at ~1000 writes/second
+- Synchronous API: Limited to ~100 concurrent requests
+- Single instance: No horizontal scaling or fault tolerance
+
+**Evolution roadmap:**
+
+#### Phase 1: Database Migration (10-50 cameras)
+**Migrate to PostgreSQL + TimescaleDB:**
+- **Concurrent writes**: Handle 10,000+ events/second with connection pooling
+- **Time-series optimization**: Automatic data partitioning by timestamp (daily/weekly chunks)
+- **Data retention**: Automated downsampling (1-min → 5-min → 1-hour) for old data
+- **Indexing**: B-tree indexes on (worker_id, timestamp), (workstation_id, timestamp)
+
+```sql
+-- TimescaleDB hypertable for automatic partitioning
+SELECT create_hypertable('ai_events', 'timestamp', 
+  chunk_time_interval => INTERVAL '1 day');
+  
+-- Continuous aggregates for real-time dashboards
+CREATE MATERIALIZED VIEW worker_hourly_metrics
+WITH (timescaledb.continuous) AS
+SELECT worker_id, 
+       time_bucket('1 hour', timestamp) AS hour,
+       SUM(CASE WHEN event_type = 'working' THEN duration ELSE 0 END) as active_time
+FROM ai_events
+GROUP BY worker_id, hour;
+```
+
+#### Phase 2: Horizontal Ingestion Scaling (50-100+ cameras)
+**Introduce message queue (Apache Kafka / Redis Streams):**
+- **Decouple ingestion from processing**: Cameras publish to queue, workers consume asynchronously
+- **Burst handling**: Queue absorbs traffic spikes (1000s of events/second) without data loss
+- **Guaranteed delivery**: Kafka's replication ensures no event loss even if nodes fail
+- **Parallel processing**: 10+ consumer workers process events concurrently
+
+**Architecture evolution:**
+```
+Cameras (100+) → Load Balancer → Ingestion API (stateless, auto-scaled)
+                                        ↓
+                                   Kafka Topics
+                                   (partitioned by site_id)
+                                        ↓
+                    Celery Workers (10+) ← Redis (task queue)
+                                        ↓
+                              TimescaleDB (clustered)
+```
+
+**Load balancing configuration:**
+```yaml
+# Kubernetes HorizontalPodAutoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+spec:
+  scaleTargetRef:
+    name: ingestion-api
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Pods
+    resource:
+      name: cpu
+      target:
+        averageUtilization: 70
+  - type: External
+    name: kafka_consumer_lag
+    target:
+      averageValue: 1000  # Scale up if lag > 1000 msgs
+```
+
+#### Phase 3: Data Partitioning (Multi-camera groups)
+**Shard data per camera group or factory site to avoid hotspots:**
+- **Horizontal partitioning**: Events for Site A stored in partition_a, Site B in partition_b
+- **Read replicas**: Dedicated read-only databases for dashboard queries
+- **Caching layer**: Redis stores pre-aggregated metrics (TTL: 30 seconds)
+
+```python
+# Partition routing logic
+def get_database_shard(site_id: str) -> str:
+    return f"timescaledb-shard-{hash(site_id) % NUM_SHARDS}"
+
+# Cache-aside pattern for metrics
+def get_factory_metrics(site_id: str) -> dict:
+    cache_key = f"metrics:factory:{site_id}"
+    if cached := redis.get(cache_key):
+        return json.loads(cached)
+    
+    # Cache miss - compute from database
+    metrics = compute_metrics_from_db(site_id)
+    redis.setex(cache_key, 30, json.dumps(metrics))  # 30s TTL
+    return metrics
+```
+
+### Multi-Site Factory Support
+
+**Enable isolated analytics per facility while aggregating in a global view:**
+
+**Schema extension:**
+```sql
+ALTER TABLE ai_events ADD COLUMN site_id VARCHAR(50);
+CREATE INDEX idx_site_timestamp ON ai_events(site_id, timestamp);
+
+-- Site master table
+CREATE TABLE factory_sites (
+    site_id VARCHAR(50) PRIMARY KEY,
+    name VARCHAR(255),
+    location VARCHAR(255),
+    timezone VARCHAR(50),
+    active BOOLEAN DEFAULT true
+);
+```
+
+**Regional deployment architecture:**
+```
+Factory Site A (Tokyo)          Factory Site B (Berlin)          Factory Site C (Chicago)
+    ↓                                  ↓                                   ↓
+Regional Backend (Tokyo)        Regional Backend (Berlin)       Regional Backend (Chicago)
+    ↓                                  ↓                                   ↓
+Regional TimescaleDB            Regional TimescaleDB            Regional TimescaleDB
+    ↓                                  ↓                                   ↓
+              ← ← ← Global Aggregation Layer (AWS) → → →
+                              ↓
+                    Central Data Warehouse (Snowflake)
+                              ↓
+                   Global Dashboard (Multi-site view)
+```
+
+**Benefits:**
+- **Data sovereignty**: European data stays in EU (GDPR compliance)
+- **Low latency**: Regional processing reduces network round-trip time
+- **Fault isolation**: Site A outage doesn't affect Site B operations
+- **Cross-site analytics**: Central warehouse enables comparative analysis
 
 ### Infrastructure Evolution
-- **Container orchestration**: Deploy on Kubernetes with auto-scaling based on queue depth.
-- **Monitoring**: Prometheus metrics + Grafana dashboards for observability.
-- **Data warehouse**: ETL pipeline to data warehouse for historical analytics.
+
+**Production-grade deployment checklist:**
+
+✅ **Container orchestration**: Kubernetes with Helm charts
+```yaml
+# Deployment manifest
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-dashboard-backend
+spec:
+  replicas: 5  # Auto-scaled by HPA
+  template:
+    spec:
+      containers:
+      - name: fastapi
+        image: bharti/worker-dashboard:latest
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+```
+
+✅ **Monitoring & Observability**:
+- **Metrics**: Prometheus scrapes `/metrics` endpoint (requests/sec, latency p95, error rate)
+- **Logging**: Structured JSON logs → Loki → Grafana dashboards
+- **Tracing**: OpenTelemetry for distributed request tracing
+- **Alerting**: PagerDuty integration for critical failures
+
+✅ **Data Warehouse Integration**:
+- **ETL pipeline**: Airflow DAG runs nightly to sync events → Snowflake
+- **Retention policy**: Hot data (7 days) in TimescaleDB, archive → S3 → Snowflake
+- **Analytics**: dbt models transform raw events → business metrics
+
+**Cost optimization at scale:**
+- Spot instances for non-critical workers (50% cost savings)
+- Data compression (TimescaleDB achieves 10:1 compression ratio)
+- Auto-scaling policies prevent over-provisioning
+
+---
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed scaling plan.
 
