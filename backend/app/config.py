@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # Metrics
     min_confidence: float = 0.7
     
+    # Celery / Redis (for async event processing)
+    celery_broker_url: str = "redis://localhost:6379/0"
+    celery_result_backend: str = "redis://localhost:6379/0"
+    
     class Config:
         env_file = ".env"
         case_sensitive = False

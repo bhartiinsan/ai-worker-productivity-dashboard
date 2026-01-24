@@ -1,7 +1,24 @@
 # Docker Compose configuration for AI Worker Productivity Dashboard
-# No version needed for Docker Compose v2+ (version attribute is obsolete)
+# Production-ready stack: Backend (FastAPI) + Frontend (React) + Redis (Celery) + SQLite
 
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: factory-dashboard-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    command: redis-server --appendonly yes
+
   backend:
     build:
       context: ./backend
@@ -12,10 +29,15 @@ services:
     environment:
       - DATABASE_URL=sqlite:///./productivity.db
       - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     volumes:
       - backend-data:/app/data
     networks:
       - app-network
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
@@ -23,6 +45,25 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: factory-dashboard-celery
+    command: celery -A app.celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=sqlite:///./productivity.db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    volumes:
+      - backend-data:/app/data
+    networks:
+      - app-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
   frontend:
     build:
@@ -44,6 +85,8 @@ services:
 
 volumes:
   backend-data:
+    driver: local
+  redis-data:
     driver: local
 
 networks:
